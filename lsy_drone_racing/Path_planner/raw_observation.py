@@ -1,3 +1,10 @@
+"""Normalize simulator observations for the planner stack.
+
+The simulator can expose gate and obstacle data through slightly different
+keys. RawObservation hides those differences and returns one dictionary with
+drone state, gate poses, obstacle poses, visibility flags, and nominal fallbacks.
+"""
+
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
@@ -5,7 +12,10 @@ from lsy_drone_racing.Path_planner.config_manager import ConfigManager
 
 
 class RawObservation:
+    """Parse raw obs/info into a stable planner input format."""
+
     def __init__(self, config_path: str):
+        """Load nominal map data and sensor settings from config_path."""
         self.config = ConfigManager(config_path)
         self.sensor_range = self.config.get_sensor_range()
         self.nominal_gates = self.config.get_nominal_gates()
@@ -13,6 +23,7 @@ class RawObservation:
         self.safety_limits = self.config.get_safety_limits()
 
     def update(self, obs, info=None):
+        """Return normalized drone, gate, and obstacle observations."""
         drone = self._read_drone_state(obs)
         gates = self._read_gates(obs, info, drone["pos"])
         obstacles = self._read_obstacles(obs, info, drone["pos"])
@@ -26,6 +37,7 @@ class RawObservation:
         }
 
     def _read_drone_state(self, obs):
+        """Extract position, velocity, attitude, and angular velocity."""
         pos = self._get_value(obs, ["pos", "position", "drone_pos"])
         vel = self._get_value(obs, ["vel", "velocity", "drone_vel"])
         rpy = self._get_value(obs, ["rpy", "attitude", "euler"])
@@ -48,15 +60,18 @@ class RawObservation:
         }
 
     def _read_gates(self, obs, info, drone_pos):
+        """Read gates from obs/info or fall back to nominal config gates."""
         gates_pos = self._get_value(obs, ["gates_pos", "gate_positions"])
         gates_quat = self._get_value(obs, ["gates_quat", "gate_quat"])
+        gates_visited = self._get_value(obs, ["gates_visited"])
 
         if gates_pos is None and info is not None:
             gates_pos = self._get_value(info, ["gates_pos", "gate_positions"])
             gates_quat = self._get_value(info, ["gates_quat", "gate_quat"])
+            gates_visited = self._get_value(info, ["gates_visited"])
 
         if gates_pos is not None:
-            return self._read_gates_from_pos_quat(gates_pos, gates_quat, drone_pos)
+            return self._read_gates_from_pos_quat(gates_pos, gates_quat, drone_pos, gates_visited)
 
         gates_raw = self._get_value(obs, ["gates", "gate_poses"])
 
@@ -68,9 +83,11 @@ class RawObservation:
 
         return self._read_gates_from_generic(gates_raw, drone_pos)
 
-    def _read_gates_from_pos_quat(self, gates_pos, gates_quat, drone_pos):
+    def _read_gates_from_pos_quat(self, gates_pos, gates_quat, drone_pos, gates_visited=None):
+        """Build gate records from simulator position/quaternion arrays."""
         gates = []
         gates_pos = np.asarray(gates_pos, dtype=float)
+        visited = None if gates_visited is None else np.asarray(gates_visited, dtype=bool)
 
         if gates_quat is not None:
             gates_quat = np.asarray(gates_quat, dtype=float)
@@ -89,7 +106,11 @@ class RawObservation:
                 rpy, yaw, normal = self._nominal_gate_orientation(gate_id)
 
             distance = float(np.linalg.norm(pos - drone_pos))
-            visible = distance <= self.sensor_range
+            visible = (
+                bool(visited[gate_id])
+                if visited is not None and gate_id < len(visited)
+                else distance <= self.sensor_range
+            )
 
             gates.append({
                 "id": gate_id,
@@ -101,12 +122,13 @@ class RawObservation:
                 "exit_dir": normal.copy(),
                 "distance": distance,
                 "visible": visible,
-                "source": "runtime",
+                "source": "observed" if visible else "nominal",
             })
 
         return gates
 
     def _read_gates_from_generic(self, gates_raw, drone_pos):
+        """Build gate records from generic dictionaries or position arrays."""
         gates = []
 
         for gate_id, gate in enumerate(gates_raw):
@@ -128,12 +150,13 @@ class RawObservation:
                 "exit_dir": normal.copy(),
                 "distance": distance,
                 "visible": visible,
-                "source": "runtime",
+                "source": "observed" if visible else "nominal",
             })
 
         return gates
 
     def _parse_gate(self, gate, gate_id):
+        """Return gate position, rpy, yaw, and normal from one raw gate item."""
         pos = None
         rpy = None
         yaw = None
@@ -177,6 +200,7 @@ class RawObservation:
         return pos, rpy, yaw, normal
 
     def _nominal_gate_orientation(self, gate_id):
+        """Use nominal gate orientation when the simulator does not provide one."""
         if gate_id < len(self.nominal_gates):
             rpy = self.nominal_gates[gate_id]["rpy"].copy()
         else:
@@ -189,15 +213,22 @@ class RawObservation:
         return rpy, yaw, normal
 
     def _read_obstacles(self, obs, info, drone_pos):
+        """Read obstacles and mark whether they are currently visible."""
         obstacles_raw = self._get_value(obs, ["obstacles", "obstacle_positions", "obstacles_pos"])
+        obstacles_visited = self._get_value(obs, ["obstacles_visited"])
 
         if obstacles_raw is None and info is not None:
-            obstacles_raw = self._get_value(info, ["obstacles", "obstacle_positions", "obstacles_pos"])
+            obstacles_raw = self._get_value(
+                info,
+                ["obstacles", "obstacle_positions", "obstacles_pos"],
+            )
+            obstacles_visited = self._get_value(info, ["obstacles_visited"])
 
         if obstacles_raw is None:
             obstacles_raw = self.nominal_obstacles
 
         obstacles = []
+        visited = None if obstacles_visited is None else np.asarray(obstacles_visited, dtype=bool)
 
         for obstacle_id, obstacle in enumerate(obstacles_raw):
             if isinstance(obstacle, dict):
@@ -210,19 +241,24 @@ class RawObservation:
 
             pos = np.array(pos, dtype=float)
             distance = float(np.linalg.norm(pos - drone_pos))
-            visible = distance <= self.sensor_range
+            visible = (
+                bool(visited[obstacle_id])
+                if visited is not None and obstacle_id < len(visited)
+                else distance <= self.sensor_range
+            )
 
             obstacles.append({
                 "id": obstacle_id,
                 "pos": pos,
                 "distance": distance,
                 "visible": visible,
-                "source": "runtime",
+                "source": "observed" if visible else "nominal",
             })
 
         return obstacles
 
     def _get_value(self, data, possible_keys):
+        """Find the first matching key, including common nested state dictionaries."""
         if data is None:
             return None
 

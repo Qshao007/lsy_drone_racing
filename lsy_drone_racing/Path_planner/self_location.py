@@ -1,8 +1,13 @@
+"""Track drone pose and provide coordinate transforms for planning."""
+
 import numpy as np
 
 
 class SelfLocation:
+    """Maintain world pose plus local/body frame conversion helpers."""
+
     def __init__(self):
+        """Initialize pose state and the local-frame origin."""
         self.initialized = False
         self.origin_pos = np.zeros(3)
         self.origin_yaw = 0.0
@@ -13,6 +18,7 @@ class SelfLocation:
         self.yaw_world = 0.0
 
     def update(self, parsed_obs):
+        """Update pose from RawObservation output and return planner state."""
         drone = parsed_obs["drone"]
 
         self.pos_world = np.array(drone["pos"], dtype=float)
@@ -28,6 +34,7 @@ class SelfLocation:
         return self.get_state()
 
     def get_state(self):
+        """Return current pose and transform callables used by planner modules."""
         return {
             "pos_world": self.pos_world.copy(),
             "vel_world": self.vel_world.copy(),
@@ -40,21 +47,32 @@ class SelfLocation:
         }
 
     def world_to_local(self, pos_world):
+        """Convert world coordinates into the fixed start-local frame."""
         delta = np.array(pos_world, dtype=float) - self.origin_pos
         return self.rotation_matrix_z(self.origin_yaw).T @ delta
 
     def local_to_world(self, pos_local):
-        return self.origin_pos + self.rotation_matrix_z(self.origin_yaw) @ np.array(pos_local, dtype=float)
+        """Convert fixed start-local coordinates back into world coordinates."""
+        return (
+            self.origin_pos
+            + self.rotation_matrix_z(self.origin_yaw) @ np.array(pos_local, dtype=float)
+        )
 
     def world_to_body(self, pos_world):
+        """Convert world coordinates into the current drone body-yaw frame."""
         delta = np.array(pos_world, dtype=float) - self.pos_world
         return self.rotation_matrix_z(self.yaw_world).T @ delta
 
     def body_to_world(self, pos_body):
-        return self.pos_world + self.rotation_matrix_z(self.yaw_world) @ np.array(pos_body, dtype=float)
+        """Convert current body-yaw-frame coordinates into world coordinates."""
+        return (
+            self.pos_world
+            + self.rotation_matrix_z(self.yaw_world) @ np.array(pos_body, dtype=float)
+        )
 
     @staticmethod
     def rotation_matrix_z(yaw):
+        """Return a yaw-only rotation matrix."""
         c = np.cos(yaw)
         s = np.sin(yaw)
 

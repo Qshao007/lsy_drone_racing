@@ -1,3 +1,9 @@
+"""Maintain the planner's current estimate of gates and obstacles.
+
+The map starts from nominal config positions. When an object becomes visible,
+its observed pose replaces the nominal pose and is marked as seen.
+"""
+
 import numpy as np
 
 
@@ -5,6 +11,7 @@ class LocalMapping:
     """Maintain estimated gate and obstacle map."""
 
     def __init__(self, config_manager):
+        """Initialize nominal gate and obstacle maps from ConfigManager."""
         self.config = config_manager
 
         self.gate_map = []
@@ -14,6 +21,8 @@ class LocalMapping:
             yaw = float(gate["rpy"][2])
             normal = self._normal_from_yaw(yaw)
 
+            # Nominal objects are useful before they are visible, but the
+            # planner can still tell whether each pose has been confirmed.
             self.gate_map.append({
                 "id": i,
                 "pos_world": gate["pos"].copy(),
@@ -33,16 +42,14 @@ class LocalMapping:
             })
 
     def update(self, parsed_obs, self_location):
-        """Update map using visible or runtime observations."""
+        """Merge visible observations into the persistent map estimate."""
         for gate in parsed_obs["gates"]:
             gate_id = gate["id"]
 
             if gate_id >= len(self.gate_map):
                 continue
 
-            is_runtime = gate.get("source") == "runtime"
-
-            if gate["visible"] or is_runtime:
+            if gate["visible"]:
                 yaw = float(gate["yaw"])
                 normal = gate.get("normal", self._normal_from_yaw(yaw))
                 normal = normal / (np.linalg.norm(normal) + 1e-9)
@@ -60,7 +67,7 @@ class LocalMapping:
             if obstacle_id >= len(self.obstacle_map):
                 continue
 
-            if obstacle["visible"] or obstacle.get("source") == "runtime":
+            if obstacle["visible"]:
                 self.obstacle_map[obstacle_id]["pos_world"] = obstacle["pos"].copy()
                 self.obstacle_map[obstacle_id]["source"] = obstacle.get("source", "observed")
                 self.obstacle_map[obstacle_id]["seen"] = True
@@ -118,6 +125,7 @@ class LocalMapping:
         }
 
     def print_summary(self, estimated_map):
+        """Print a compact debug view of the current map estimate."""
         print("\n========== LOCAL MAPPING DEBUG ==========")
 
         print("\nGates:")
@@ -146,6 +154,7 @@ class LocalMapping:
 
     @staticmethod
     def _normal_from_yaw(yaw):
+        """Convert yaw into the gate's forward normal vector."""
         normal = np.array(
             [
                 np.cos(yaw),

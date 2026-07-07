@@ -1,9 +1,15 @@
+"""Simple sequential gate planner kept as a readable baseline.
+
+The main controller now uses TrajectoryManager for obstacle-aware planning.
+DirectionalGatePlanner remains useful for debugging the basic
+entry-center-exit gate logic.
+"""
+
 import numpy as np
 
 
 class DirectionalGatePlanner:
-    """
-    Directional sequential gate planner.
+    """Directional sequential gate planner.
 
     For each gate:
         APPROACH -> PASS -> EXIT -> next gate
@@ -21,6 +27,7 @@ class DirectionalGatePlanner:
         center_threshold=0.22,
         exit_threshold=0.25,
     ):
+        """Initialize phase thresholds and gate offsets."""
         self.current_gate_id = 0
         self.phase = self.APPROACH
 
@@ -32,6 +39,7 @@ class DirectionalGatePlanner:
         self.exit_threshold = exit_threshold
 
     def update(self, estimated_map, self_state):
+        """Advance the phase machine and return the next target pose."""
         gates = estimated_map["gates"]
 
         if len(gates) == 0:
@@ -56,6 +64,8 @@ class DirectionalGatePlanner:
         center_pos = gate_pos.copy()
         exit_pos = gate_pos + normal * self.exit_distance
 
+        # The phase machine forces a clean approach, gate-center pass, and
+        # exit before moving to the next gate.
         if self.phase == self.APPROACH:
             target_pos = entry_pos
             threshold = self.entry_threshold
@@ -81,7 +91,11 @@ class DirectionalGatePlanner:
                 if self.current_gate_id >= len(gates):
                     self.current_gate_id = 0
 
-        pos_local = self_state["world_to_local"](target_pos) if "world_to_local" in self_state else target_pos - drone_pos
+        pos_local = (
+            self_state["world_to_local"](target_pos)
+            if "world_to_local" in self_state
+            else target_pos - drone_pos
+        )
 
         return {
             "gate_id": self.current_gate_id,
@@ -93,6 +107,7 @@ class DirectionalGatePlanner:
         }
 
     def _hover_target(self, self_state):
+        """Return a hold-position target when no gates are available."""
         return {
             "gate_id": None,
             "phase": "hover",
@@ -103,6 +118,7 @@ class DirectionalGatePlanner:
         }
 
     def print_summary(self, target):
+        """Print the current baseline-planner target."""
         print("\n========== PLANNER DEBUG ==========")
         print("Current gate:", target["gate_id"])
         print("Phase       :", target["phase"])

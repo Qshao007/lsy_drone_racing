@@ -1,22 +1,37 @@
+"""Small TOML reader for planner configuration values.
+
+The planner modules use this wrapper instead of reading the TOML structure
+directly. It keeps nominal gates, obstacles, sensor range, and safety limits in
+one stable format.
+"""
+
 import tomllib
+
 import numpy as np
 
 
 class ConfigManager:
+    """Expose the parts of an environment config needed by the planner."""
+
     def __init__(self, config_path):
+        """Load a TOML config file once and keep the parsed dictionary."""
         with open(config_path, "rb") as f:
             self.cfg = tomllib.load(f)
 
     def get_sensor_range(self):
+        """Return the gate/obstacle visibility radius."""
         return self.cfg["env"]["sensor_range"]
 
     def get_env_freq(self):
+        """Return the high-level environment frequency."""
         return self.cfg["env"]["freq"]
 
     def get_control_mode(self):
+        """Return whether the environment expects state or attitude commands."""
         return self.cfg["env"]["control_mode"]
 
     def get_nominal_gates(self):
+        """Return nominal gate poses as numpy arrays."""
         gates = []
         for gate in self.cfg["env"]["track"]["gates"]:
             gates.append({
@@ -26,6 +41,7 @@ class ConfigManager:
         return gates
 
     def get_nominal_obstacles(self):
+        """Return nominal obstacle positions as numpy arrays."""
         obstacles = []
         for obstacle in self.cfg["env"]["track"]["obstacles"]:
             obstacles.append({
@@ -34,6 +50,7 @@ class ConfigManager:
         return obstacles
 
     def get_safety_limits(self):
+        """Return configured world-position bounds."""
         safety = self.cfg["env"]["track"]["safety_limits"]
         return {
             "low": np.array(safety["pos_limit_low"], dtype=float),
@@ -41,8 +58,10 @@ class ConfigManager:
         }
 
     def is_track_randomized(self):
+        """Return True when the track is randomized by the simulator."""
         return bool(self.cfg["env"]["track"]["randomize"])
-    
+
+
 if __name__ == "__main__":
     config_path = "config/level0.toml"
 
